@@ -37,17 +37,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Tuya BLE from a config entry."""
     address: str = entry.data[CONF_ADDRESS].upper()
     ble_device = None
+    is_connectable = False
     
     # Try to get connectable device first
     ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
+    if ble_device:
+        is_connectable = True
     
     # If not found as connectable, try non-connectable (some devices advertise this way)
     if not ble_device:
         service_info = bluetooth.async_last_service_info(hass, address, connectable=False)
         if service_info:
             ble_device = service_info.device
-            _LOGGER.debug(
-                "Found device %s as non-connectable, will attempt connection anyway",
+            _LOGGER.warning(
+                "Device %s is advertising as non-connectable. "
+                "Touch/interact with the device physically to wake it up, "
+                "then the integration will connect automatically.",
                 address
             )
     
@@ -55,6 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not ble_device:
         try:
             ble_device = await get_device(address)
+            is_connectable = True  # If bleak found it, assume connectable
         except Exception as ex:
             _LOGGER.debug("Failed to get device via bleak: %s", ex)
     
@@ -69,15 +75,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = TuyaBLECoordinator(hass, device)
 
-    '''
-    try:
-        await device.update()
-    except BLEAK_EXCEPTIONS as ex:
-        raise ConfigEntryNotReady(
-            f"Could not communicate with Tuya BLE device with address {address}"
-        ) from ex
-    '''
-    hass.add_job(device.update())
+    # Only attempt immediate update if device is connectable
+    # Otherwise, wait for a connectable advertisement
+    if is_connectable:
+        hass.add_job(device.update())
+    else:
+        _LOGGER.info(
+            "Device %s setup complete but waiting for connectable advertisement. "
+            "Touch the device to wake it up.",
+            address
+        )
 
     @callback
     def _async_update_ble(
@@ -88,6 +95,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device.set_ble_device_and_advertisement_data(
             service_info.device, service_info.advertisement
         )
+        # If we receive a connectable advertisement, try to connect
+        if service_info.connectable:
+            _LOGGER.debug(
+                "Device %s is now connectable, triggering update",
+                address
+            )
+            hass.add_job(device.update())
 
     entry.async_on_unload(
         bluetooth.async_register_callback(

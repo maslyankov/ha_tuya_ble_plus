@@ -715,20 +715,30 @@ class TuyaBLEDevice:
             await asyncio.sleep(0.01)
             if self._client and self._client.is_connected and self._is_paired:
                 return
-            attempts_count = 100
+            # Reduced from 100 to 5 attempts - if device is non-connectable,
+            # more attempts won't help. User needs to interact with device.
+            max_attempts = 5
+            attempts_count = max_attempts
             while attempts_count > 0:
                 attempts_count -= 1
                 if attempts_count == 0:
-                    _LOGGER.error(
-                        "%s: Connecting, all attempts failed; RSSI: %s",
+                    _LOGGER.warning(
+                        "%s: Connection failed after %d attempts (RSSI: %s). "
+                        "If device advertises as non-connectable, touch/interact "
+                        "with it physically to wake it up.",
                         self.address,
+                        max_attempts,
                         self.rssi,
                     )
                     raise BleakNotFoundError()
                 try:
                     async with global_connect_lock:
                         _LOGGER.debug(
-                            "%s: Connecting; RSSI: %s", self.address, self.rssi
+                            "%s: Connecting (attempt %d/%d); RSSI: %s",
+                            self.address,
+                            max_attempts - attempts_count,
+                            max_attempts,
+                            self.rssi,
                         )
                         client = await establish_connection(
                             BleakClientWithServiceCache,
@@ -739,12 +749,14 @@ class TuyaBLEDevice:
                             ble_device_callback=lambda: self._ble_device,
                         )
                 except BleakNotFoundError:
-                    _LOGGER.error(
-                        "%s: device not found, not in range, or poor RSSI: %s",
+                    _LOGGER.debug(
+                        "%s: device not found or not connectable (attempt %d/%d, RSSI: %s)",
                         self.address,
+                        max_attempts - attempts_count,
+                        max_attempts,
                         self.rssi,
-                        exc_info=True,
                     )
+                    await asyncio.sleep(1)  # Wait before retry
                     continue
                 except BLEAK_EXCEPTIONS:
                     _LOGGER.debug(
