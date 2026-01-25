@@ -1,91 +1,131 @@
-# Home Assistant support for Tuya BLE devices
+# Tuya BLE Plus - Home Assistant Integration
 
 ## Overview
 
 This integration supports Tuya devices locally connected via BLE.
 
-It includes support for **Fingerbot Touch** (product_id 'bs3ubslo') and is primarily maintained for use with Fingerbots.
+**Tuya BLE Plus** is a fork of the original `ha_tuya_ble` integration with added features:
+- **Manual MAC address entry** - Add devices by MAC address, bypassing Bluetooth auto-discovery
+- **Support for non-connectable devices** - Works with devices that advertise as non-connectable (like Fingerbot Touch)
+- **Can run alongside the original integration** - Different domain name (`tuya_ble_plus`) allows both integrations to coexist
 
-**Note on Battery Saving:** These devices usually enter sleep mode after 5 minutes of inactivity.
-To prevent battery drain, automatic reconnection is disabled.
-The connection will reestablish automatically when an action is triggered (potentially introducing a slight delay).
-You can also use the provided Home Assistant connection status entities and reconnect / reload buttons to reconnect manually.
+It includes support for **Fingerbot Touch** (product_id 'bs3ubslo') and is primarily maintained for use with Fingerbots.
 
 ## Installation
 
-Place the `custom_components` folder in your configuration directory (or add its contents to an existing `custom_components` folder). Alternatively install via [HACS](https://hacs.xyz/).
+Place the `custom_components/tuya_ble_plus` folder in your Home Assistant configuration directory (or add its contents to an existing `custom_components` folder).
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=pascalgoedeke&repository=ha_tuya_ble&category=integration)
+**Note:** This integration uses the domain `tuya_ble_plus` so it can be installed alongside the original `tuya_ble` integration.
 
 ## Usage
 
-After adding to Home Assistant integration should discover all supported Bluetooth devices, or you can add discoverable devices manually.
+### Adding Devices
 
-The integration works locally, but connection to Tuya BLE device requires device ID and encryption key from Tuya IOT cloud.
-To obtain the credentials, please refer to *old* official Tuya integration [documentation](https://web.archive.org/web/20240204064157/https://www.home-assistant.io/integrations/tuya/).
+1. Go to **Settings** → **Devices & Services** → **+ Add Integration**
+2. Search for **"Tuya BLE Plus"**
+3. Choose one of:
+   - **Auto-discover devices** - Automatically find nearby Tuya BLE devices
+   - **Manual MAC address entry** - Enter the device MAC address manually (useful for devices that advertise as non-connectable)
+
+### Finding Your Device's MAC Address
+
+If your device doesn't appear in auto-discovery:
+1. Go to **Settings** → **Devices & Services** → **Bluetooth**
+2. Look for your device in the list of discovered Bluetooth devices
+3. The MAC address will be shown (e.g., `DC:23:51:5E:23:CB`)
+
+### Tuya Cloud Credentials
+
+The integration works locally, but requires device ID and encryption key from Tuya IoT cloud for initial setup.
+To obtain the credentials, please refer to the official Tuya integration [documentation](https://www.home-assistant.io/integrations/tuya/).
+
+## Non-Connectable Devices
+
+Some Tuya BLE devices (like Fingerbot Touch) advertise as **non-connectable** to save battery. For these devices:
+
+1. The integration will set up successfully but show the device as "unavailable"
+2. **Touch/interact with the device physically** to wake it up
+3. The device will briefly advertise as connectable
+4. The integration will automatically detect this and connect
+
+You'll see log messages like:
+```
+Device DC:23:51:5E:23:CB is advertising as non-connectable. 
+Touch/interact with the device physically to wake it up...
+```
+
+## Battery Saving Mode
+
+These devices usually enter sleep mode after 5 minutes of inactivity.
+To prevent battery drain, automatic reconnection is disabled.
+The connection will reestablish automatically when:
+- An action is triggered (potentially introducing a slight delay)
+- You physically interact with the device
+- You use the reconnect/reload buttons in Home Assistant
+
+## Supported Devices
+
+### Fingerbots (category_id 'szjqr')
+- Fingerbot (product_ids 'ltak7e1p', 'y6kttvd6', 'yrnk7mnn', 'nvr2rocq', 'bnt7wajf', 'rvdceqjh', '5xhbk964') - Original device, CR2 battery
+- Adaprox Fingerbot (product_id 'y6kttvd6') - Built-in battery with USB-C charging
+- Fingerbot Plus (product_ids 'blliqpsj', 'ndvkgsrm', 'yiihr7zh', 'neq16kgd') - Has sensor button for manual control
+- CubeTouch 1s (product_id '3yqdo5yt') - Built-in battery with USB-C charging
+- CubeTouch II (product_id 'xhf790if') - Built-in battery with USB-C charging
+
+### Fingerbots (category_id 'kg')
+- Fingerbot Plus (product_ids 'mknd4lci', 'riecov42')
+- Fingerbot Switch Robot (product_id '4ctjfrzq')
+- **Fingerbot Touch** (product_id 'bs3ubslo') - 2-channel touch switch
+
+### Temperature and Humidity Sensors (category_id 'wsdcg')
+- Soil moisture sensor (product_id 'ojzlzzsw')
+- Soil Thermo-Hygrometer (product_id 'tv6peegl')
+
+### CO2 Sensors (category_id 'co2bj')
+- CO2 Detector (product_id '59s19z5m')
+
+### Smart Locks (category_id 'ms')
+- Smart Lock (product_ids 'ludzroix', 'isk2p555', 'gumrixyt', 'uamrw6h3')
+- TEKXDD Fingerprint Smart Lock (product_id 'okkyfgfs')
+
+### Climate (category_id 'wk')
+- Thermostatic Radiator Valve (product_ids 'drlajpqc', 'nhj2j7su', 'zmachryv')
+
+### Smart Water Devices
+- Smart water bottle (category 'znhsb', product_id 'cdlandip')
+- Smart Water Valve (category 'sfkzq', product_id 'nxquc5lb')
+
+### Irrigation (category_id 'ggq')
+- Irrigation computer (product_id '6pahkcau')
+- 2-outlet irrigation computer SGW02 (product_id 'hfgdqhho')
+
+### Lights (category_id 'dd')
+- LGB102 Magic Strip Lights (product_id 'nvfrtxlq')
+- Most light products should be supported as the Light class tries to get device description from the cloud
+
+### Smart Bulbs (category_id 'dj')
+- SSG Smart 9W (product_id 'u4h3jtqr')
 
 ## Credits
 
-_Inspired by code of [@redphx](https://github.com/redphx/poc-tuya-ble-fingerbot)_
+- Original HASS component by [@PlusPlus-ua](https://github.com/PlusPlus-ua/ha_tuya_ble)
+- Forked from [@pascalgoedeke](https://github.com/pascalgoedeke/ha_tuya_ble) with light support by @airy10 and @patriot1889
+- Inspired by code of [@redphx](https://github.com/redphx/poc-tuya-ble-fingerbot)
 
-_Original HASS component forked from https://github.com/PlusPlus-ua/ha_tuya_ble_
+## Support
 
-_Merged several changes by @airy10 and @patriot1889, including light support, forked from https://github.com/garnser/ha_tuya_ble_
+If you encounter issues:
+1. Check that your device's MAC address is correct
+2. Ensure the device is registered in the Tuya app
+3. For non-connectable devices, try touching/interacting with the device
+4. Check Home Assistant logs for detailed error messages
 
-## Supported devices list
+## Support the Original Developer
 
-* Fingerbots (category_id 'szjqr')
-  + Fingerbot (product_ids 'ltak7e1p', 'y6kttvd6', 'yrnk7mnn', 'nvr2rocq', 'bnt7wajf', 'rvdceqjh', '5xhbk964'), original device, first in category, powered by CR2 battery.
-  + Adaprox Fingerbot (product_id 'y6kttvd6'), built-in battery with USB type C charging.
-  + Fingerbot Plus (product_ids 'blliqpsj', 'ndvkgsrm', 'yiihr7zh', 'neq16kgd'), almost same as original, has sensor button for manual control.
-  + CubeTouch 1s (product_id '3yqdo5yt'), built-in battery with USB type C charging.
-  + CubeTouch II (product_id 'xhf790if'), built-in battery with USB type C charging.
+_The following is from the original developer:_
 
-  All features available in Home Assistant, programming (series of actions) is implemented for Fingerbot Plus.
-  For programming exposed entities 'Program' (switch), 'Repeat forever', 'Repeats count', 'Idle position' and 'Program' (text). Format of program text is: 'position[/time];...' where position is in percents, optional time is in seconds (zero if missing).
+I am working on this integration in Ukraine. Our country was subjected to brutal aggression by Russia. The war still continues. The capital of Ukraine - Kyiv, where I live, and many other cities and villages are constantly under threat of rocket attacks. Our air defense forces are doing wonders, but they also need support.
 
-* Fingerbots (category_id 'kg')
-  + Fingerbot Plus (product_ids 'mknd4lci', 'riecov42').
-  + Fingerbot Switch Robot (product_id '4ctjfrzq').
-  + Fingerbot Touch (product_id 'bs3ubslo').
-
-* Temperature and humidity sensors (category_id 'wsdcg')
-  + Soil moisture sensor (product_id 'ojzlzzsw').
-  + Soil Thermo-Hygrometer (product_id 'tv6peegl').
-
-* CO2 sensors (category_id 'co2bj')
-  + CO2 Detector (product_id '59s19z5m').
-
-* Smart Locks (category_id 'ms')
-  + Smart Lock (product_ids 'ludzroix', 'isk2p555', 'gumrixyt', 'uamrw6h3').
-  + TEKXDD Fingerprint Smart Lock (product_id 'okkyfgfs').
-
-* Climate (category_id 'wk')
-  + Thermostatic Radiator Valve (product_ids 'drlajpqc', 'nhj2j7su', 'zmachryv').
-
-* Smart water bottle (category_id 'znhsb')
-  + Smart water bottle (product_id 'cdlandip').
-
-* Smart Water Valve (category_id 'sfkzq')
-  + Smart Water Valve (product_id 'nxquc5lb').
-
-* Irrigation computer (category_id 'ggq')
-  + Irrigation computer (product_id '6pahkcau').
-  + 2-outlet irrigation computer SGW02 (product_id 'hfgdqhho'), also known as MOES BWV-YC02-EU-GY.
-
-* Lights (category_id 'dd')
-  + LGB102 Magic Strip Lights (product_id 'nvfrtxlq').
-  + Most light products should be supported as the Light class tries to get device description from the cloud when they are added.
-
-* Smart Bulbs (category_id 'dj')
-  + SSG Smart 9W (product_id 'u4h3jtqr').
-
-## Support project
-_The following is a comment from the original developer which deserves to stay_
-
-
-I am working on this integration in Ukraine. Our country was subjected to brutal aggression by Russia. The war still continues. The capital of Ukraine - Kyiv, where I live, and many other cities and villages are constantly under threat of rocket attacks. Our air defense forces are doing wonders, but they also need support. So if you want to help the development of this integration, donate some money and I will spend it to support our air defense.
-<br><br>
 <p align="center">
   <a href="https://www.buymeacoffee.com/3PaK6lXr4l"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy me an air defense"></a>
 </p>
