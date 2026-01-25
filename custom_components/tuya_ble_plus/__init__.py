@@ -35,10 +35,29 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Tuya BLE from a config entry."""
-    address: str = entry.data[CONF_ADDRESS]
-    ble_device = bluetooth.async_ble_device_from_address(
-        hass, address.upper(), True
-    ) or await get_device(address)
+    address: str = entry.data[CONF_ADDRESS].upper()
+    ble_device = None
+    
+    # Try to get connectable device first
+    ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
+    
+    # If not found as connectable, try non-connectable (some devices advertise this way)
+    if not ble_device:
+        service_info = bluetooth.async_last_service_info(hass, address, connectable=False)
+        if service_info:
+            ble_device = service_info.device
+            _LOGGER.debug(
+                "Found device %s as non-connectable, will attempt connection anyway",
+                address
+            )
+    
+    # Last resort: try bleak directly
+    if not ble_device:
+        try:
+            ble_device = await get_device(address)
+        except Exception as ex:
+            _LOGGER.debug("Failed to get device via bleak: %s", ex)
+    
     if not ble_device:
         raise ConfigEntryNotReady(
             f"Could not find Tuya BLE device with address {address}"
