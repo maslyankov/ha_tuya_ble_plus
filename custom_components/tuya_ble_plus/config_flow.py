@@ -216,6 +216,7 @@ class TuyaBLEConfigFlow(ConfigFlow, domain=DOMAIN):
         self._data: dict[str, Any] = {}
         self._manager: HASSTuyaBLEDeviceManager | None = None
         self._get_device_info_error = False
+        self._manual_address: str | None = None
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -238,11 +239,53 @@ class TuyaBLEConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the user step."""
+        """Handle the user step to choose between discovery and manual entry."""
         if self._manager is None:
             self._manager = HASSTuyaBLEDeviceManager(self.hass, self._data)
         await self._manager.build_cache()
+        
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=["discover", "manual"],
+        )
+
+    async def async_step_discover(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle automatic discovery."""
         return await self.async_step_login()
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle manual MAC address entry."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            address = user_input[CONF_ADDRESS].upper().strip()
+            # Validate MAC address format
+            if len(address.replace(":", "").replace("-", "")) == 12:
+                # Normalize to colon-separated format
+                address_clean = address.replace(":", "").replace("-", "")
+                self._manual_address = ":".join(
+                    address_clean[i : i + 2] for i in range(0, 12, 2)
+                )
+                await self.async_set_unique_id(self._manual_address)
+                self._abort_if_unique_id_configured()
+                return await self.async_step_login()
+            else:
+                errors["base"] = "invalid_mac"
+
+        return self.async_show_form(
+            step_id="manual",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ADDRESS): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={"example_mac": "DC:23:51:5E:23:CB"},
+        )
 
     async def async_step_login(
         self, user_input: dict[str, Any] | None = None
@@ -283,6 +326,30 @@ class TuyaBLEConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the user step to pick discovered device."""
         errors: dict[str, str] = {}
+
+        # Handle manual address entry - skip discovery and go straight to credential check
+        if self._manual_address:
+            address = self._manual_address
+            credentials = await self._manager.get_device_credentials(
+                address, self._get_device_info_error, True
+            )
+            self._data[CONF_ADDRESS] = address
+            if credentials is None:
+                self._get_device_info_error = True
+                # Show error but allow retry with same address
+                return self.async_show_form(
+                    step_id="manual_confirm",
+                    data_schema=vol.Schema({}),
+                    errors={"base": "device_not_registered"},
+                    description_placeholders={"address": address},
+                )
+            else:
+                local_name = f"{credentials.device_name} {address[-8:].replace(':', '')}"
+                return self.async_create_entry(
+                    title=local_name,
+                    data={CONF_ADDRESS: address},
+                    options=self._data,
+                )
 
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
@@ -348,6 +415,21 @@ class TuyaBLEConfigFlow(ConfigFlow, domain=DOMAIN):
                 },
             ),
             errors=errors,
+        )
+
+    async def async_step_manual_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle confirmation after manual entry error."""
+        if user_input is not None:
+            # Retry with force update
+            self._get_device_info_error = True
+            return await self.async_step_device()
+        
+        return self.async_show_form(
+            step_id="manual_confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={"address": self._manual_address},
         )
 
     @staticmethod
