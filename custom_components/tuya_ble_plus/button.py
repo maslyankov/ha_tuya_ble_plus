@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import logging
-from typing import Callable
+from typing import Awaitable, Callable
 
 from homeassistant.components.button import (
     ButtonEntityDescription,
@@ -300,15 +300,19 @@ async def async_setup_entry(
                 )
             )
 
+    # Diagnostic buttons for reconnection - always available
+    # These are especially useful for battery-powered devices that
+    # may disconnect frequently or advertise as non-connectable
     action_mappings: list[TuyaBLEActionButtonMapping] = [
         TuyaBLEActionButtonMapping(
             description=ButtonEntityDescription(
                 key="reconnect",
                 entity_category=EntityCategory.DIAGNOSTIC,
-                icon="mdi:restart",
+                icon="mdi:bluetooth-connect",
             ),
             action=lambda device: device.reconnect(),
-            is_available=lambda self, product: not self._device.connected
+            # Always available - useful for forcing connection attempts
+            is_available=None,
         ),
         TuyaBLEActionButtonMapping(
             description=ButtonEntityDescription(
@@ -317,7 +321,18 @@ async def async_setup_entry(
                 icon="mdi:sync",
             ),
             action=lambda device: device.reconnect_and_update(),
-            is_available=lambda self, product: not self._device.connected
+            # Always available
+            is_available=None,
+        ),
+        TuyaBLEActionButtonMapping(
+            description=ButtonEntityDescription(
+                key="scan_and_connect",
+                entity_category=EntityCategory.DIAGNOSTIC,
+                icon="mdi:bluetooth-search",
+            ),
+            action=lambda device: device.scan_and_connect(),
+            # Always available - performs fresh BLE scan before connecting
+            is_available=None,
         ),
     ]
     for mapping in action_mappings:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS, get_device
+from bleak import BleakScanner
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import ADDRESS, BluetoothCallbackMatcher
@@ -37,33 +38,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Tuya BLE from a config entry."""
     address: str = entry.data[CONF_ADDRESS].upper()
     ble_device = None
-    is_connectable = False
-    
+    advertised_connectable = False
+
     # Try to get connectable device first
     ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
     if ble_device:
-        is_connectable = True
-    
+        advertised_connectable = True
+        _LOGGER.debug("Device %s found as connectable", address)
+
     # If not found as connectable, try non-connectable (some devices advertise this way)
     if not ble_device:
         service_info = bluetooth.async_last_service_info(hass, address, connectable=False)
         if service_info:
             ble_device = service_info.device
-            _LOGGER.warning(
+            _LOGGER.info(
                 "Device %s is advertising as non-connectable. "
-                "Touch/interact with the device physically to wake it up, "
-                "then the integration will connect automatically.",
+                "Will attempt connection anyway - many devices are still "
+                "connectable despite this flag.",
                 address
             )
-    
+
     # Last resort: try bleak directly
     if not ble_device:
         try:
             ble_device = await get_device(address)
-            is_connectable = True  # If bleak found it, assume connectable
+            advertised_connectable = True  # If bleak found it, assume connectable
+            _LOGGER.debug("Device %s found via bleak directly", address)
         except Exception as ex:
             _LOGGER.debug("Failed to get device via bleak: %s", ex)
-    
+
     if not ble_device:
         raise ConfigEntryNotReady(
             f"Could not find Tuya BLE device with address {address}"
@@ -75,16 +78,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = TuyaBLECoordinator(hass, device)
 
-    # Only attempt immediate update if device is connectable
-    # Otherwise, wait for a connectable advertisement
-    if is_connectable:
-        hass.add_job(device.update())
-    else:
-        _LOGGER.info(
-            "Device %s setup complete but waiting for connectable advertisement. "
-            "Touch the device to wake it up.",
-            address
-        )
+    # Always attempt to connect, regardless of advertised connectable status.
+    # The BLE "connectable" flag is advisory - many devices (especially battery-powered
+    # ones like Fingerbot Touch) advertise as non-connectable but still accept connections.
+    _LOGGER.debug(
+        "Device %s: attempting initial connection (advertised_connectable=%s, category=%s)",
+        address,
+        advertised_connectable,
+        device.category,
+    )
+    hass.add_job(device.update())
 
     @callback
     def _async_update_ble(
@@ -95,13 +98,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device.set_ble_device_and_advertisement_data(
             service_info.device, service_info.advertisement
         )
-        # If we receive a connectable advertisement, try to connect
+
+        # For battery-powered devices (category "kg"), always try to connect when
+        # we receive ANY advertisement - they may only advertise briefly when awake.
+        # The "connectable" flag is advisory and often incorrect for these devices.
+        is_battery_device = device.category == "kg"
+
         if service_info.connectable:
             _LOGGER.debug(
-                "Device %s is now connectable, triggering update",
+                "Device %s is advertising as connectable, triggering update",
                 address
             )
             hass.add_job(device.update())
+        elif is_battery_device:
+            # Battery device advertising as non-connectable - try anyway!
+            # These devices often advertise briefly when woken and may accept
+            # connections even when advertising as non-connectable.
+            _LOGGER.info(
+                "Device %s (battery-powered) received advertisement (RSSI: %s), "
+                "attempting connection despite non-connectable flag",
+                address,
+                service_info.rssi,
+            )
+            hass.add_job(device.update())
+        else:
+            _LOGGER.debug(
+                "Device %s received non-connectable advertisement (RSSI: %s)",
+                address,
+                service_info.rssi,
+            )
 
     entry.async_on_unload(
         bluetooth.async_register_callback(

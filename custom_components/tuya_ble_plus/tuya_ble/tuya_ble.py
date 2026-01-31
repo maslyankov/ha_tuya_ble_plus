@@ -12,6 +12,7 @@ from typing import Any
 
 import json
 
+from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak.exc import BleakDBusError
@@ -344,6 +345,54 @@ class TuyaBLEDevice:
         await self._ensure_connected()
         await self.update()
 
+    async def scan_and_connect(self) -> bool:
+        """Scan for the device and attempt to connect.
+
+        This method performs a fresh BLE scan to find the device,
+        which may help establish a connection for devices that
+        advertise as non-connectable.
+
+        Returns True if connection was successful, False otherwise.
+        """
+        _LOGGER.info("%s: Starting scan_and_connect", self.address)
+
+        try:
+            # Perform a fresh scan to find the device
+            _LOGGER.debug("%s: Scanning for device...", self.address)
+            device = await BleakScanner.find_device_by_address(
+                self.address,
+                timeout=10.0,
+            )
+
+            if device:
+                _LOGGER.info(
+                    "%s: Found device via scan: %s (connectable info not available from scan)",
+                    self.address,
+                    device,
+                )
+                # Update our BLE device reference with the freshly scanned one
+                self._ble_device = device
+
+                # Now try to connect
+                await self._ensure_connected()
+                return self._client is not None and self._client.is_connected
+            else:
+                _LOGGER.warning(
+                    "%s: Device not found during scan. Make sure the device is powered on "
+                    "and within range. For BLE proxies, ensure the proxy can see the device.",
+                    self.address,
+                )
+                return False
+
+        except Exception as ex:
+            _LOGGER.error(
+                "%s: Error during scan_and_connect: %s",
+                self.address,
+                ex,
+                exc_info=True,
+            )
+            return False
+
     async def update(self) -> None:
         _LOGGER.debug("%s: Updating", self.address)
         await self._send_packet(TuyaBLECode.FUN_SENDER_DEVICE_STATUS, bytes())
@@ -632,32 +681,34 @@ class TuyaBLEDevice:
         self._is_paired = False
         if self._expected_disconnect:
             _LOGGER.debug(
-                "%s: Disconnected from device; RSSI: %s",
+                "%s: Disconnected from device (expected); RSSI: %s",
                 self.address,
                 self.rssi,
             )
             self._fire_disconnected_callbacks()
             self._fire_connection_status_callbacks()
             return
+
+        # Clear client reference to allow reconnection
         self._client = None
         self._fire_connection_status_callbacks()
-        
+
+        is_battery_device = getattr(self, "category", None) == "kg"
+
         if was_paired:
             # Decide whether to schedule an automatic reconnect.
-            # For power-saving switches (category "kg") we want to avoid
+            # For power-saving/battery devices (category "kg") we want to avoid
             # persistent reconnect attempts because the device sleeps.
-            is_switch_category = False
-            if getattr(self, "category", None) == "kg":
-                is_switch_category = True
-
-            # Don't reconnect if device is switch
-            if is_switch_category:
-                _LOGGER.debug(
-                    "%s: Device unexpectedly disconnected, but category indicates a switch (category=%s); not scheduling automatic reconnect",
+            # However, the device is still available for on-demand connection
+            # when user triggers an action.
+            if is_battery_device:
+                _LOGGER.info(
+                    "%s: Device disconnected (category=%s, battery-powered). "
+                    "Not scheduling automatic reconnect to preserve battery. "
+                    "Device will reconnect when you trigger an action.",
                     self.address,
                     getattr(self, "category", None),
                 )
-            # Schedule reconnect
             else:
                 _LOGGER.warning(
                     "%s: Device unexpectedly disconnected, scheduling reconnect; RSSI: %s",
@@ -666,11 +717,17 @@ class TuyaBLEDevice:
                 )
                 asyncio.create_task(self._reconnect())
         else:
-            _LOGGER.warning(
-                "%s: Device unexpectedly disconnected; RSSI: %s",
-                self.address,
-                self.rssi,
-            )
+            if is_battery_device:
+                _LOGGER.debug(
+                    "%s: Device disconnected before pairing completed (battery device)",
+                    self.address,
+                )
+            else:
+                _LOGGER.warning(
+                    "%s: Device unexpectedly disconnected before pairing; RSSI: %s",
+                    self.address,
+                    self.rssi,
+                )
 
     def _disconnect(self) -> None:
         """Disconnect from device."""
@@ -715,57 +772,130 @@ class TuyaBLEDevice:
             await asyncio.sleep(0.01)
             if self._client and self._client.is_connected and self._is_paired:
                 return
-            # Reduced from 100 to 5 attempts - if device is non-connectable,
-            # more attempts won't help. User needs to interact with device.
-            max_attempts = 5
+            # For battery-powered devices (like Fingerbot Touch), we may need more
+            # attempts as the device might not respond immediately.
+            # Use 8 attempts with longer waits between them.
+            max_attempts = 8
             attempts_count = max_attempts
+            is_battery_device = getattr(self, "category", None) == "kg"
+
             while attempts_count > 0:
                 attempts_count -= 1
+                current_attempt = max_attempts - attempts_count
+
                 if attempts_count == 0:
                     _LOGGER.warning(
-                        "%s: Connection failed after %d attempts (RSSI: %s). "
-                        "If device advertises as non-connectable, touch/interact "
-                        "with it physically to wake it up.",
+                        "%s: Connection failed after %d attempts (RSSI: %s, category: %s). "
+                        "For battery-powered devices, try touching/interacting with the device "
+                        "physically to wake it up, then trigger the action again.",
                         self.address,
                         max_attempts,
                         self.rssi,
+                        getattr(self, "category", "unknown"),
                     )
                     raise BleakNotFoundError()
+
                 try:
                     async with global_connect_lock:
                         _LOGGER.debug(
-                            "%s: Connecting (attempt %d/%d); RSSI: %s",
+                            "%s: Connecting (attempt %d/%d); RSSI: %s, category: %s, ble_device: %s",
                             self.address,
-                            max_attempts - attempts_count,
+                            current_attempt,
                             max_attempts,
                             self.rssi,
-                        )
-                        client = await establish_connection(
-                            BleakClientWithServiceCache,
+                            getattr(self, "category", "unknown"),
                             self._ble_device,
-                            self.address,
-                            self._disconnected,
-                            use_services_cache=True,
-                            ble_device_callback=lambda: self._ble_device,
                         )
+
+                        # For battery devices, try different connection strategies
+                        if is_battery_device:
+                            # First attempts: use establish_connection with the BLEDevice
+                            # This ensures we go through the correct BLE adapter/proxy
+                            if current_attempt <= 4:
+                                _LOGGER.debug(
+                                    "%s: Using establish_connection with BLEDevice (attempt %d)",
+                                    self.address,
+                                    current_attempt,
+                                )
+                                # Don't use services cache - force fresh discovery
+                                client = await establish_connection(
+                                    BleakClientWithServiceCache,
+                                    self._ble_device,
+                                    self.address,
+                                    self._disconnected,
+                                    use_services_cache=False,
+                                    ble_device_callback=lambda: self._ble_device,
+                                )
+                            else:
+                                # Later attempts: try direct MAC connection as fallback
+                                # This might work if there's a local adapter available
+                                _LOGGER.debug(
+                                    "%s: Using direct BleakClient by MAC address (fallback attempt %d)",
+                                    self.address,
+                                    current_attempt,
+                                )
+                                client = BleakClient(
+                                    self.address,
+                                    disconnected_callback=self._disconnected,
+                                    timeout=20.0,
+                                )
+                                await asyncio.wait_for(
+                                    client.connect(),
+                                    timeout=25.0,
+                                )
+                        else:
+                            # For non-battery devices, use the normal connection method
+                            use_cache = current_attempt > 2
+                            client = await establish_connection(
+                                BleakClientWithServiceCache,
+                                self._ble_device,
+                                self.address,
+                                self._disconnected,
+                                use_services_cache=use_cache,
+                                ble_device_callback=lambda: self._ble_device,
+                            )
+                except asyncio.TimeoutError:
+                    _LOGGER.debug(
+                        "%s: connection timed out (attempt %d/%d, RSSI: %s)",
+                        self.address,
+                        current_attempt,
+                        max_attempts,
+                        self.rssi,
+                    )
+                    wait_time = 2 if is_battery_device else 1
+                    await asyncio.sleep(wait_time)
+                    continue
                 except BleakNotFoundError:
                     _LOGGER.debug(
                         "%s: device not found or not connectable (attempt %d/%d, RSSI: %s)",
                         self.address,
-                        max_attempts - attempts_count,
+                        current_attempt,
                         max_attempts,
                         self.rssi,
                     )
-                    await asyncio.sleep(1)  # Wait before retry
+                    # Wait longer between attempts for battery devices
+                    wait_time = 2 if is_battery_device else 1
+                    await asyncio.sleep(wait_time)
                     continue
                 except BLEAK_EXCEPTIONS:
                     _LOGGER.debug(
-                        "%s: communication failed", self.address, exc_info=True
+                        "%s: communication failed (attempt %d/%d)",
+                        self.address,
+                        current_attempt,
+                        max_attempts,
+                        exc_info=True,
                     )
+                    await asyncio.sleep(1)
                     continue
-                except:
-                    _LOGGER.debug("%s: unexpected error",
-                                  self.address, exc_info=True)
+                except Exception:
+                    _LOGGER.debug(
+                        "%s: unexpected error (attempt %d/%d)",
+                        self.address,
+                        current_attempt,
+                        max_attempts,
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(1)
                     continue
 
                 if client and client.is_connected:

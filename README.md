@@ -39,6 +39,40 @@ If your device doesn't appear in auto-discovery:
 The integration works locally, but requires device ID and encryption key from Tuya IoT cloud for initial setup.
 To obtain the credentials, please refer to the official Tuya integration [documentation](https://www.home-assistant.io/integrations/tuya/).
 
+## Bluetooth Proxy Requirements
+
+This integration requires a Bluetooth adapter that supports **active BLE connections**. Not all Bluetooth proxies support this.
+
+### Supported: ESPHome Bluetooth Proxy
+
+ESPHome Bluetooth proxy with active connections enabled **works correctly** with this integration.
+
+Example ESPHome configuration:
+
+```yaml
+bluetooth_proxy:
+  active: true
+```
+
+**Note:** `active: true` refers to the ability to make active BLE connections to devices, not just scan mode. This is required for controlling Tuya BLE devices.
+
+### NOT Supported: Shelly Bluetooth Proxy
+
+**Shelly devices are passive-only** and cannot be used with this integration. Even with "Active" scanning mode enabled in Shelly settings, Shelly Bluetooth proxies can only:
+- ✅ Receive BLE advertisements (passive)
+- ❌ Make active BLE connections to devices
+
+If you see errors like this, you need to use an ESPHome Bluetooth proxy instead:
+```
+No connectable Bluetooth adapters. Shelly devices are passive-only and cannot connect
+```
+
+### Other Bluetooth Options
+
+- **Built-in Bluetooth adapter** - Works if your Home Assistant host has a Bluetooth adapter
+- **USB Bluetooth dongle** - Works when connected directly to your Home Assistant host
+- **ESPHome Bluetooth proxy** - Works with `bluetooth_proxy: active: true`
+
 ## Non-Connectable Devices
 
 Some Tuya BLE devices (like Fingerbot Touch) advertise as **non-connectable** to save battery. For these devices:
@@ -50,7 +84,7 @@ Some Tuya BLE devices (like Fingerbot Touch) advertise as **non-connectable** to
 
 You'll see log messages like:
 ```
-Device DC:23:51:5E:23:CB is advertising as non-connectable. 
+Device DC:23:51:5E:23:CB is advertising as non-connectable.
 Touch/interact with the device physically to wake it up...
 ```
 
@@ -112,13 +146,22 @@ The connection will reestablish automatically when:
 - Forked from [@pascalgoedeke](https://github.com/pascalgoedeke/ha_tuya_ble) with light support by @airy10 and @patriot1889
 - Inspired by code of [@redphx](https://github.com/redphx/poc-tuya-ble-fingerbot)
 
-## Support
+## Troubleshooting
 
 If you encounter issues:
-1. Check that your device's MAC address is correct
-2. Ensure the device is registered in the Tuya app
-3. For non-connectable devices, try touching/interacting with the device
-4. Check Home Assistant logs for detailed error messages
+1. **Check your Bluetooth proxy** - Shelly devices won't work; use ESPHome with `bluetooth_proxy: active: true`
+2. Check that your device's MAC address is correct
+3. Ensure the device is registered in the Tuya app
+4. For non-connectable devices, try touching/interacting with the device
+5. Check Home Assistant logs for detailed error messages
+
+### Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| "No connectable Bluetooth adapters. Shelly devices are passive-only" | Using Shelly as Bluetooth proxy | Use ESPHome Bluetooth proxy with `active: true` |
+| Device shows "unavailable" | Device is sleeping (battery-saving) | Touch/interact with device to wake it |
+| "Could not find Tuya BLE device" | Device not advertising | Ensure device is powered on and in range |
 
 ## Support the Original Developer
 

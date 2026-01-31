@@ -180,6 +180,10 @@ class TuyaBLEBinarySensor(TuyaBLEEntity, BinarySensorEntity):
     @property
     def available(self) -> bool:
         """Return if entity is available."""
+        # The connectivity sensor should always be available, regardless of
+        # the device connection status - otherwise it can't show disconnection
+        if self._mapping.dp_id == CONNECTED_DP_ID:
+            return True
         result = super().available
         if result and self._mapping.is_available:
             result = self._mapping.is_available(self, self._product)
