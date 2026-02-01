@@ -1545,25 +1545,40 @@ class TuyaBLEDevice:
 
         packet_num, pos = self._unpack_int(data, pos)
 
-        if packet_num < self._input_expected_packet_num:
-            _LOGGER.error(
-                "%s: Unexpcted packet (number %s) in notifications, " "expected %s",
+        # Packet 0 always starts a new message - treat it as a fresh start
+        if packet_num == 0:
+            if self._input_expected_packet_num != 0:
+                # We were in the middle of receiving another message, but a new one started.
+                # This is normal after reconnection or if previous message was incomplete.
+                _LOGGER.debug(
+                    "%s: New message started (packet 0) while expecting packet %s. "
+                    "Resetting input buffer.",
+                    self.address,
+                    self._input_expected_packet_num,
+                )
+            self._input_buffer = bytearray()
+            self._input_expected_length, pos = self._unpack_int(data, pos)
+            pos += 1
+            self._input_buffer += data[pos:]
+            self._input_expected_packet_num = 1
+        elif packet_num == self._input_expected_packet_num:
+            # Expected packet in sequence
+            self._input_buffer += data[pos:]
+            self._input_expected_packet_num += 1
+        elif packet_num < self._input_expected_packet_num:
+            # Stale/duplicate packet from a previous message - discard silently
+            _LOGGER.debug(
+                "%s: Discarding stale packet %s (expecting %s)",
                 self.address,
                 packet_num,
                 self._input_expected_packet_num,
             )
-            self._clean_input()
-
-        if packet_num == self._input_expected_packet_num:
-            if packet_num == 0:
-                self._input_buffer = bytearray()
-                self._input_expected_length, pos = self._unpack_int(data, pos)
-                pos += 1
-            self._input_buffer += data[pos:]
-            self._input_expected_packet_num += 1
+            return
         else:
-            _LOGGER.error(
-                "%s: Missing packet (number %s) in notifications, received %s",
+            # Missing packets in sequence - the message is corrupted
+            _LOGGER.debug(
+                "%s: Missing packet(s) in sequence. Expected %s, received %s. "
+                "Waiting for next packet 0.",
                 self.address,
                 self._input_expected_packet_num,
                 packet_num,
